@@ -1,0 +1,78 @@
+#installing dependencies 
+! pip install pyspark
+
+#running a pyspark session
+from pyspark.sql import SparkSession
+spark = SparkSession.builder.appName("spark").getOrCreate()
+
+#getting data
+! git clone https://github.com/education454/diabetes_dataset
+
+! ls diabetes_dataset
+
+df = spark.read.csv("/content/diabetes_dataset/diabetes.csv",header=True,inferSchema=True)
+df.show()
+df.printSchema()
+df.summary().show()
+
+print(df.count(),len(df.columns))
+df.groupBy('Outcome').count().show()
+df.describe().show()
+
+#Cleaning data
+
+#finding null values
+for col in df.columns:
+  print(col+":",df[df[col].isNull()].count())
+ 
+#finding total no of zero values in columns
+def count_zeros():
+  columns_list = ['Glucose','BloodPressure','SkinThickness','Insulin','BMI']
+  for i in columns_list:
+    print(i+":",df[df[i]==0].count())
+
+count_zeros()
+from pyspark.sql.functions import *
+for i in df.columns[1:6]:
+  data = df.agg({i:'mean'}).first()[0]
+  print("Mean value for {} is {}".format(i,int(data)))
+  df = df.withColumn(i,when(df[i]==0,int(data)).otherwise(df[i]))
+  
+df.show()
+
+#finding Correlation
+for col in df.columns:
+  print("Correlation to outcome for {} is {}".format(col,df.stat.corr('Outcome',col)))
+
+from pyspark.ml.feature import VectorAssembler
+assembler = VectorAssembler(inputCols=['Pregnancies','Glucose','BloodPressure','SkinThickness','Insulin','BMI','DiabetesPedigreeFunction','Age'],outputCol='features')
+output_data=assembler.transform(df)
+
+output_data.printSchema()
+output_data.show()
+
+#Building model
+from pyspark.ml.classification import LogisticRegression
+final_data = output_data.select('features','Outcome')
+
+final_data.printSchema()
+train,test = final_data.randomSplit([0.7,0.3])
+models = LogisticRegression(labelCol='Outcome')
+model = models.fit(train)
+
+summary = model.summary
+summary.predictions.describe().show()
+
+from pyspark.ml.evaluation import BinaryClassificationEvaluator
+predictions = model.evaluate(test)
+
+predictions.predictions.show(20)
+
+evaluator = BinaryClassificationEvaluator(rawPredictionCol='rawPrediction',labelCol='Outcome')
+evaluator.evaluate(model.transform(test))
+
+#Saving model
+model.save("diabetes_prediction_model")
+
+from pyspark.ml.classification import LogisticRegressionModel
+model = LogisticRegressionModel.load('diabetes_prediction_model')
